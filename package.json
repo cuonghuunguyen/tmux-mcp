@@ -1,0 +1,54 @@
+{
+  "name": "tmux-mcp",
+  "version": "0.1.0",
+  "description": "MCP server: persistent tmux-backed shell sessions for AI agents — interactive commands, REPLs, ssh, dev servers",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "tmux-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "!dist/test",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "tsc && node dist/test/smoke.js",
+    "prepare": "tsc"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "tmux",
+    "terminal",
+    "shell",
+    "repl",
+    "agent",
+    "claude",
+    "llm"
+  ],
+  "author": "Cuong Nguyen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cuonghuunguyen/tmux-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cuonghuunguyen/tmux-mcp/issues"
+  },
+  "homepage": "https://github.com/cuonghuunguyen/tmux-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
