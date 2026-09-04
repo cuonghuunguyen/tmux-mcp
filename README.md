@@ -1,5 +1,8 @@
 # tmux-mcp
 
+[![npm](https://img.shields.io/npm/v/mcp-tmux.svg)](https://www.npmjs.com/package/mcp-tmux)
+[![license](https://img.shields.io/npm/l/mcp-tmux.svg)](./LICENSE)
+
 An [MCP](https://modelcontextprotocol.io) server that gives an AI agent **persistent, tmux-backed
 shell sessions** — with the same interaction model as a normal `Bash` tool: send a command, get the
 output and an exit code back.
@@ -39,22 +42,28 @@ There are **two families of tools**:
 
 ## Install
 
+Published on npm as **[`mcp-tmux`](https://www.npmjs.com/package/mcp-tmux)** (the name `tmux-mcp`
+was already taken). No install step is needed — `npx` fetches it on first use:
+
 ```bash
-git clone https://github.com/cuonghuunguyen/tmux-mcp.git
-cd tmux-mcp
-npm install
-npm run build     # tsc → dist/
-npm test          # builds, then runs the end-to-end smoke test over real stdio (~60 s)
+npx -y mcp-tmux        # runs the server on stdio
+```
+
+Or install it once:
+
+```bash
+npm install -g mcp-tmux
+mcp-tmux               # the same stdio server
 ```
 
 ## Register with a client
 
-The server speaks MCP over stdio. Point your client at `dist/index.js`.
+The server speaks MCP over stdio.
 
 **Claude Code:**
 
 ```bash
-claude mcp add -s user tmux -- node /absolute/path/to/tmux-mcp/dist/index.js
+claude mcp add -s user tmux -- npx -y mcp-tmux
 claude mcp list     # tmux ✓ Connected
 ```
 
@@ -64,15 +73,27 @@ claude mcp list     # tmux ✓ Connected
 {
   "mcpServers": {
     "tmux": {
-      "command": "node",
-      "args": ["/absolute/path/to/tmux-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "mcp-tmux"]
     }
   }
 }
 ```
 
-If several Node versions are installed, use the **absolute path** to a Node ≥ 18 binary rather than
-bare `node` — the client's `PATH` is not always your shell's.
+If several Node versions are installed, use the **absolute path** to a Node ≥ 18 `npx`/`node`
+binary rather than the bare command — the client's `PATH` is not always your shell's.
+
+## Develop from source
+
+```bash
+git clone https://github.com/cuonghuunguyen/tmux-mcp.git
+cd tmux-mcp
+npm install
+npm run build     # tsc → dist/
+npm test          # builds, then runs the end-to-end smoke test over real stdio (~60 s)
+```
+
+Point a client at the local build with `node /absolute/path/to/tmux-mcp/dist/index.js`.
 
 ## Tools
 

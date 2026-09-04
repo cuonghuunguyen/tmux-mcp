@@ -1,27 +1,32 @@
 {
-  "name": "tmux-mcp",
+  "name": "mcp-tmux",
   "version": "0.1.0",
-  "description": "MCP server: persistent tmux-backed shell sessions for AI agents — interactive commands, REPLs, ssh, dev servers",
+  "description": "MCP server: persistent tmux-backed shell sessions for AI agents \u2014 interactive commands, REPLs, ssh, dev servers",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "tmux-mcp": "dist/index.js"
+    "mcp-tmux": "dist/index.js"
   },
   "files": [
     "dist",
     "!dist/test",
+    "!dist/**/*.map",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
+    "clean": "rm -rf dist",
     "start": "node dist/index.js",
-    "test": "tsc && node dist/test/smoke.js",
-    "prepare": "tsc"
+    "test": "npm run build && node dist/test/smoke.js",
+    "prepare": "tsc",
+    "prepublishOnly": "npm run clean && npm run build",
+    "release": "bash scripts/release.sh"
   },
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "mcp-server",
     "tmux",
     "terminal",
     "shell",
@@ -40,6 +45,11 @@
     "url": "https://github.com/cuonghuunguyen/tmux-mcp/issues"
   },
   "homepage": "https://github.com/cuonghuunguyen/tmux-mcp#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": false
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.5.4"
@@ -50,5 +60,14 @@
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "freebsd",
+    "openbsd",
+    "netbsd",
+    "sunos",
+    "aix"
+  ]
 }
