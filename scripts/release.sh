@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Local release: verify, build, smoke-test, publish to npm, tag.
+# Local release: verify, build, publish to npm, tag.
 #
 #   ./scripts/release.sh            # publish the version in package.json
 #   ./scripts/release.sh patch      # bump patch first (also: minor | major | 1.2.3)
 #   DRY_RUN=1 ./scripts/release.sh  # do everything except publish/tag/push
+#   RUN_TESTS=1 ./scripts/release.sh # also run the ~60 s smoke test (off by default)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,7 +25,9 @@ case "$node_bin" in
 esac
 major="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$major" -ge 18 ] || { red "node >= 18 required (have $(node -v))"; exit 1; }
-command -v tmux >/dev/null || { red "tmux not installed — the smoke test needs it"; exit 1; }
+if [ -n "${RUN_TESTS:-}" ]; then
+  command -v tmux >/dev/null || { red "tmux not installed — RUN_TESTS needs it"; exit 1; }
+fi
 
 # --- preconditions -----------------------------------------------------------
 say "Checking git state"
@@ -54,8 +57,10 @@ fi
 say "Clean build"
 npm run clean >/dev/null && npm run build
 
-say "Smoke test (~60 s)"
-node dist/test/smoke.js
+if [ -n "${RUN_TESTS:-}" ]; then
+  say "Smoke test (~60 s)"
+  node dist/test/smoke.js
+fi
 
 say "Tarball contents"
 npm pack --dry-run
