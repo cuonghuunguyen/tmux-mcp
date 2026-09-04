@@ -1,6 +1,10 @@
 /**
  * End-to-end smoke test. Talks to the real server over stdio with the
  * official SDK client. Prints PASS/FAIL per scenario, exits non-zero on failure.
+ *
+ * The user-server family (tmux_ls / tmux_pane_* / tmux_new_* / tmux_kill_target)
+ * is exercised against a throwaway socket passed via TMUX_MCP_USER_SOCKET, so the
+ * developer's own tmux server is never touched.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -34,10 +38,10 @@ function skip(name: string, why: string): void {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const q = (s: string) => JSON.stringify(s.length > 200 ? s.slice(0, 200) + "…" : s);
 
-function cleanEnv(): Record<string, string> {
+function cleanEnv(extra: Record<string, string> = {}): Record<string, string> {
   const e: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) e[k] = v;
-  return e;
+  return { ...e, ...extra };
 }
 
 interface Instance {
@@ -49,11 +53,11 @@ interface Instance {
   stderr: string[];
 }
 
-async function startInstance(): Promise<Instance> {
+async function startInstance(env: Record<string, string> = {}): Promise<Instance> {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverPath],
-    env: cleanEnv(),
+    env: cleanEnv(env),
     cwd: projectRoot,
     stderr: "pipe",
   });
@@ -89,6 +93,28 @@ function serverAlive(socket: string): boolean {
   }
 }
 
+function listSessions(socket: string): string {
+  try {
+    return execFileSync("tmux", ["-L", socket, "ls"], { encoding: "utf8" });
+  } catch {
+    return "";
+  }
+}
+
+function killServer(socket: string): void {
+  try {
+    execFileSync("tmux", ["-L", socket, "kill-server"], { stdio: "ignore" });
+  } catch {
+    /* nothing running */
+  }
+}
+
+const ALL_TOOLS = [
+  "tmux_kill", "tmux_kill_target", "tmux_list", "tmux_ls", "tmux_new_session",
+  "tmux_new_window", "tmux_pane_capture", "tmux_pane_exec", "tmux_pane_send_keys",
+  "tmux_read", "tmux_run", "tmux_send_keys", "tmux_split_pane",
+];
+
 // ---------------------------------------------------------------- unit checks
 function unitChecks(): void {
   check("unit stripAnsi", stripAnsi("\x1b[?2004l\x1b]133;D;0\x07hi\x1b[0m") === "hi");
@@ -101,18 +127,14 @@ function unitChecks(): void {
   check("unit truncate", truncate("x".repeat(100), 40).includes("truncated 60 chars"));
 }
 
-// ---------------------------------------------------------------- main
-async function main(): Promise<void> {
-  unitChecks();
-
-  const inst = await startInstance();
-  console.log(`# server pid=${inst.pid} socket=${inst.socket}`);
+// ---------------------------------------------------------------- scenarios
+async function scenarios(userSocket: string): Promise<void> {
+  const inst = await startInstance({ TMUX_MCP_USER_SOCKET: userSocket });
+  console.log(`# server pid=${inst.pid} socket=${inst.socket} user-socket=${userSocket}`);
 
   const tools = await inst.client.listTools();
   const names = tools.tools.map((t) => t.name).sort();
-  check("00 five tools registered",
-    JSON.stringify(names) === JSON.stringify(["tmux_kill", "tmux_list", "tmux_read", "tmux_run", "tmux_send_keys"]),
-    names.join(","));
+  check("00 all tools registered", JSON.stringify(names) === JSON.stringify(ALL_TOOLS), names.join(","));
 
   // 1
   let r = await call(inst, "tmux_run", { command: "echo hello" });
@@ -140,6 +162,10 @@ async function main(): Promise<void> {
   r = await call(inst, "tmux_run", { command: "for i in 1 2 3; do\necho $i\ndone" });
   check("05 multi-line command", r.text === "1\n2\n3", q(r.text));
 
+  // 5b — the echo of a command ending in ")" must not look like an interactive prompt
+  r = await call(inst, "tmux_run", { command: "(sleep 1.5; echo paren)", timeout: 10 });
+  check("05b echo ending in ) is not a prompt", r.text === "paren", q(r.text));
+
   // 6
   r = await call(inst, "tmux_run", { command: "ls /nonexistent" });
   check("06 stderr + exit code 2", r.text.includes("No such file") && r.text.includes("[exit code 2]"), q(r.text));
@@ -157,11 +183,11 @@ async function main(): Promise<void> {
   r = await call(inst, "tmux_run", { command: "echo shellok", session: "py" });
   check("07d shell healthy after REPL", r.text === "shellok", q(r.text));
 
-  // 8
+  // 8 — idle timeout: sleep 30 is silent, so 2 s of silence ends the call
   const t8 = Date.now();
   r = await call(inst, "tmux_run", { command: "sleep 30", session: "slow", timeout: 2 });
   const dt8 = Date.now() - t8;
-  check("08a timeout footer, not killed", /timeout after 2 s/.test(r.text) && dt8 < 6000, `${dt8}ms ${q(r.text)}`);
+  check("08a idle footer, not killed", /no output for 2 s/.test(r.text) && dt8 < 6000, `${dt8}ms ${q(r.text)}`);
   const t8b = Date.now();
   r = await call(inst, "tmux_send_keys", { session: "slow", keys: ["C-c"], timeout: 15 });
   check("08b C-c returns promptly", Date.now() - t8b < 5000, `${Date.now() - t8b}ms ${q(r.text)}`);
@@ -180,12 +206,24 @@ async function main(): Promise<void> {
   check("09b tmux_read timeout 0", r.text.includes("(no new output)"), q(r.text));
   await call(inst, "tmux_send_keys", { session: "dev", keys: ["C-c"], timeout: 15 });
 
-  // 10
+  // 10 — fractional idle timeout, then the hard cap
   const t10 = Date.now();
-  r = await call(inst, "tmux_run", { command: "(echo a; sleep 5)", session: "quiet", quiet_ms: 500, timeout: 10 });
+  r = await call(inst, "tmux_run", { command: "(echo a; sleep 5)", session: "quiet", timeout: 0.5 });
   const dt10 = Date.now() - t10;
-  check("10 quiet_ms", dt10 < 2500 && r.text.includes("a") && /no output for 500 ms/.test(r.text), `${dt10}ms ${q(r.text)}`);
+  check("10a fractional idle timeout",
+    dt10 < 2500 && r.text.includes("a") && /no output for 0\.5 s/.test(r.text), `${dt10}ms ${q(r.text)}`);
   await call(inst, "tmux_send_keys", { session: "quiet", keys: ["C-c"], timeout: 15 });
+
+  const t10b = Date.now();
+  r = await call(inst, "tmux_run", {
+    command: "while true; do echo tick; sleep 0.2; done",
+    session: "cap", timeout: 5, max_timeout: 2,
+  });
+  const dt10b = Date.now() - t10b;
+  check("10b hard cap while output flows",
+    dt10b < 5000 && /hard cap/.test(r.text) && /after 2 s/.test(r.text) && r.text.includes("tick"),
+    `${dt10b}ms ${q(r.text)}`);
+  await call(inst, "tmux_send_keys", { session: "cap", keys: ["C-c"], timeout: 15 });
 
   // 11
   r = await call(inst, "tmux_run", { command: "less /etc/hostname", session: "tui", timeout: 15 });
@@ -234,6 +272,106 @@ async function main(): Promise<void> {
   ]);
   check("15b same session serializes", rs1.text === "one" && rs2.text === "two", `${q(rs1.text)} ${q(rs2.text)}`);
 
+  // ---- 20: the user's own tmux server -------------------------------------
+
+  // 20a
+  r = await call(inst, "tmux_ls");
+  check("20a tmux_ls with no server", !r.isError && /no tmux server/.test(r.text), q(r.text));
+
+  // 20b
+  r = await call(inst, "tmux_new_session", { name: "usr1", cwd: "/tmp", command: "echo created; pwd" });
+  check("20b new session runs its command",
+    r.text.includes('created session "usr1"') && /pane %\d+/.test(r.text) &&
+    r.text.includes("created") && r.text.includes("/tmp") && !r.isError, q(r.text));
+
+  // 20c
+  r = await call(inst, "tmux_ls");
+  check("20c tmux_ls tree", /session usr1/.test(r.text) && /pane %\d+.*fg=bash/.test(r.text), q(r.text));
+
+  // 20d
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "false" });
+  check("20d1 false → [exit code 1]", r.text.includes("[exit code 1]") && !r.isError, q(r.text));
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "true" });
+  check("20d2 true → no footer", !r.text.includes("exit code"), q(r.text));
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "echo -n abc" });
+  check("20d3 exact output", r.text === "abc", q(r.text));
+
+  // 20e — a long-lived REPL in the user's pane
+  const t20e = Date.now();
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "python3 -q", timeout: 10 });
+  const dt20e = Date.now() - t20e;
+  check("20e1 python REPL prompt", /waiting for input/.test(r.text) && dt20e < 5000, `${dt20e}ms ${q(r.text)}`);
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "1+1", timeout: 10 });
+  check("20e2 untracked REPL evaluates",
+    r.text.split("\n")[0].trim() === "2" && /python3/.test(r.text), q(r.text));
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "import time; time.sleep(1.5); print(7)", timeout: 10 });
+  check("20e2b untracked echo ending in ) is not a prompt",
+    r.text.split("\n")[0].trim() === "7", q(r.text));
+  r = await call(inst, "tmux_pane_send_keys", { target: "usr1", keys: ["C-d"], timeout: 5 });
+  check("20e3 C-d leaves the REPL", !r.isError, q(r.text));
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "echo back" });
+  check("20e4 tracked again after the REPL", r.text === "back", q(r.text));
+
+  // 20f
+  const t20f = Date.now();
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "sleep 30", timeout: 1 });
+  const dt20f = Date.now() - t20f;
+  check("20f1 idle timeout in a user pane",
+    /no output for 1 s/.test(r.text) && dt20f < 4000, `${dt20f}ms ${q(r.text)}`);
+  await call(inst, "tmux_pane_send_keys", { target: "usr1", keys: ["C-c"], timeout: 5 });
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "echo ok" });
+  check("20f2 pane healthy after C-c", r.text === "ok", q(r.text));
+
+  // 20g
+  r = await call(inst, "tmux_pane_exec", {
+    target: "usr1", command: "(echo a; sleep 0.5; echo READY; sleep 20)", wait_for: "READY", timeout: 10,
+  });
+  check("20g wait_for in a user pane",
+    r.text.includes("READY") && /matched/.test(r.text), q(r.text));
+  await call(inst, "tmux_pane_send_keys", { target: "usr1", keys: ["C-c"], timeout: 5 });
+
+  // 20h
+  r = await call(inst, "tmux_pane_capture", { target: "usr1", lines: 200 });
+  check("20h pane capture with scrollback",
+    r.text.includes("back") && r.text.includes("ok") && /scrollback\]$/.test(r.text.trim()), q(r.text));
+
+  // 20i
+  r = await call(inst, "tmux_new_window", { session: "usr1", name: "w2", command: "echo inwin" });
+  check("20i1 new window runs its command",
+    /created window @\d+/.test(r.text) && r.text.includes('"w2"') && r.text.includes("inwin"), q(r.text));
+  const winId = /created window (@\d+)/.exec(r.text)?.[1] ?? "";
+  const winPane = /pane (%\d+)/.exec(r.text)?.[1] ?? "";
+  r = await call(inst, "tmux_split_pane", { target: winPane, direction: "right", size: 40 });
+  check("20i2 split pane", /new pane %\d+/.test(r.text) && !r.isError, q(r.text));
+  const splitId = /new pane (%\d+)/.exec(r.text)?.[1] ?? "";
+  r = await call(inst, "tmux_ls", { session: "usr1" });
+  check("20i3 two windows", (r.text.match(/^ {2}window /gm) ?? []).length === 2, q(r.text));
+
+  // 20j
+  r = await call(inst, "tmux_kill_target", { target: splitId });
+  check("20j1 kill pane (kind inferred)", r.text === `[killed pane ${splitId}]`, q(r.text));
+  r = await call(inst, "tmux_kill_target", { target: winId });
+  check("20j2 kill window (kind inferred)", r.text === `[killed window ${winId}]`, q(r.text));
+  r = await call(inst, "tmux_ls", { session: "usr1" });
+  check("20j3 one window left", (r.text.match(/^ {2}window /gm) ?? []).length === 1, q(r.text));
+  r = await call(inst, "tmux_kill_target", { target: "usr1" });
+  check("20j4 kill session", r.text === "[killed session usr1]", q(r.text));
+  r = await call(inst, "tmux_ls");
+  check("20j5 last session gone", !r.isError && /no tmux server|\(no sessions/.test(r.text), q(r.text));
+
+  // 20k — created before the graceful shutdown, must survive it
+  r = await call(inst, "tmux_new_session", { name: "usr2", cwd: "/tmp" });
+  check("20k1 usr2 created", r.text.includes('created session "usr2"') && !r.isError, q(r.text));
+
+  // 20l — input validation on the user family
+  r = await call(inst, "tmux_new_session", { name: "a.b" });
+  check("20l1 session name with '.'", r.isError, q(r.text));
+  r = await call(inst, "tmux_new_session", { name: "a:b" });
+  check("20l2 session name with ':'", r.isError, q(r.text));
+  r = await call(inst, "tmux_pane_exec", { target: "%99999", command: "echo x" });
+  check("20l3 unknown target is a clean error",
+    r.isError && /tmux|pane/.test(r.text) && !/undefined|Cannot read/.test(r.text), q(r.text));
+
   // 18 (optional, before shutdown scenarios)
   let dockerOk = false;
   try {
@@ -252,7 +390,7 @@ async function main(): Promise<void> {
   }
 
   // 17 (hard kill) — separate instance
-  const inst2 = await startInstance();
+  const inst2 = await startInstance({ TMUX_MCP_USER_SOCKET: userSocket });
   await call(inst2, "tmux_run", { command: "echo hi", session: "hard" });
   check("17a second instance server up", serverAlive(inst2.socket));
   process.kill(inst2.pid, "SIGKILL");
@@ -266,6 +404,21 @@ async function main(): Promise<void> {
   await sleep(800);
   check("16b tmux server gone after close", !serverAlive(inst.socket));
   check("16c logdir removed", !fs.existsSync(inst.logdir), inst.logdir);
+
+  // 20k2 — the user's sessions are never cleaned up with the private server
+  const surviving = listSessions(userSocket);
+  check("20k2 user server survives shutdown", /^usr2:/m.test(surviving), q(surviving));
+}
+
+// ---------------------------------------------------------------- main
+async function main(): Promise<void> {
+  unitChecks();
+  const userSocket = `tmux-mcp-usr-${process.pid}`;
+  try {
+    await scenarios(userSocket);
+  } finally {
+    killServer(userSocket);
+  }
 }
 
 main()

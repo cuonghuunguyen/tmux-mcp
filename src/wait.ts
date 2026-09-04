@@ -1,22 +1,24 @@
 import * as fs from "node:fs";
 import { PROMPT_SETTLE_MS, capturePane, paneInfo } from "./tmux.js";
 import type { PaneInfo } from "./tmux.js";
-import { MARKER_RE, applyCarriageReturns, stripAnsi, stripEcho } from "./ansi.js";
+import { MARKER_RE, applyCarriageReturns, isCommandEcho, stripAnsi, stripEcho } from "./ansi.js";
 import type { Session } from "./sessions.js";
 
 export type WaitStatus =
   | "exited"        // shell printed its prompt again; exit code known
   | "shell_exited"  // the pane's shell itself died
   | "matched"       // wait_for regex matched
-  | "quiet"         // no output for quiet_ms
+  | "idle"          // no new output for idleMs; the process is still running
   | "prompt"        // an interactive program is waiting for input
-  | "timeout"       // timeout elapsed, process still running
+  | "timeout"       // the hard cap elapsed while output was still flowing
   | "immediate";    // timeout: 0 — whatever was new right now
 
 export interface WaitOpts {
-  timeoutMs: number;
+  /** Return once no new output has arrived for this long. <= 0 disables. */
+  idleMs: number;
+  /** Hard cap on the total wait. <= 0 disables. Both <= 0 means "return immediately". */
+  maxMs: number;
   waitFor?: RegExp;
-  quietMs?: number;
   pollMs?: number;
   /** The command we typed, so its echo is not matched by wait_for. */
   command?: string;
@@ -110,7 +112,7 @@ export async function waitForResult(session: Session, opts: WaitOpts): Promise<W
   };
 
   try {
-    if (opts.timeoutMs <= 0) {
+    if (opts.idleMs <= 0 && opts.maxMs <= 0) {
       read();
       info = await paneInfo(session.paneId).catch(() => null);
       const mk = lastMarker(raw.toString("latin1"));
@@ -175,7 +177,7 @@ export async function waitForResult(session: Session, opts: WaitOpts): Promise<W
       // 5. interactive prompt heuristic
       if (silentFor >= PROMPT_SETTLE_MS) {
         const line = await lastPaneLine(session.paneId);
-        if (PROMPT_RE.test(line)) {
+        if (PROMPT_RE.test(line) && !isCommandEcho(line, opts.command)) {
           session.idle = false;
           return {
             status: "prompt",
@@ -186,19 +188,19 @@ export async function waitForResult(session: Session, opts: WaitOpts): Promise<W
         }
       }
 
-      // 6. opt-in quiet
-      if (opts.quietMs && opts.quietMs > 0 && silentFor >= opts.quietMs) {
+      // 6. idle timeout — the process keeps running on purpose
+      if (opts.idleMs > 0 && silentFor >= opts.idleMs) {
         session.idle = false;
         return {
-          status: "quiet",
+          status: "idle",
           raw,
           fg: info?.fg ?? "",
           alternate: info?.alternate ?? false,
         };
       }
 
-      // 7. timeout — the process keeps running on purpose
-      if (Date.now() - startedAt >= opts.timeoutMs) {
+      // 7. hard cap — output is still flowing, but we have waited long enough
+      if (opts.maxMs > 0 && Date.now() - startedAt >= opts.maxMs) {
         session.idle = false;
         return {
           status: "timeout",

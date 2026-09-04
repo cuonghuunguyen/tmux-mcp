@@ -59,6 +59,18 @@ export function stripEcho(text: string, command: string): string {
   return lines.join("\n");
 }
 
+/**
+ * Is `line` (the last rendered line of a pane) just the echo of the command we typed?
+ * Used to keep the interactive-prompt heuristic from firing on `(sleep 5; echo x)`,
+ * whose echo ends in `)` and would otherwise look like a prompt after 800 ms of silence.
+ */
+export function isCommandEcho(line: string, command: string | undefined): boolean {
+  if (command === undefined) return false;
+  const last = command.split("\n").map((l) => l.trim()).filter((l) => l.length).pop();
+  if (!last) return false;
+  return line.trim().endsWith(last);
+}
+
 export function trimTrailingBlank(text: string): string {
   return text.replace(/[ \t]*(?:\r?\n[ \t]*)*$/, "");
 }
@@ -70,7 +82,7 @@ export function truncate(text: string, max = MAX_OUTPUT): string {
   const dropped = text.length - headLen - tailLen;
   return (
     text.slice(0, headLen) +
-    `\n\n… [truncated ${dropped} chars — use tmux_read with screen:true or capture more via wait_for] …\n\n` +
+    `\n\n… [truncated ${dropped} chars — read the screen instead (tmux_read screen:true / tmux_pane_capture) or narrow the wait with wait_for] …\n\n` +
     text.slice(text.length - tailLen)
   );
 }

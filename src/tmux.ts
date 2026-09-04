@@ -18,7 +18,10 @@ export const SIZE = process.env.TMUX_MCP_SIZE || "200x50";
 const sizeMatch = /^(\d+)x(\d+)$/.exec(SIZE);
 export const PANE_W = sizeMatch ? sizeMatch[1] : "200";
 export const PANE_H = sizeMatch ? sizeMatch[2] : "50";
-export const DEFAULT_TIMEOUT_S = num(process.env.TMUX_MCP_DEFAULT_TIMEOUT, 120);
+/** Default idle timeout: seconds without new output before we hand control back. */
+export const IDLE_TIMEOUT_S = num(process.env.TMUX_MCP_IDLE_TIMEOUT, 15);
+/** Default hard cap: total seconds a single call may wait. */
+export const MAX_TIMEOUT_S = num(process.env.TMUX_MCP_MAX_TIMEOUT, 600);
 export const PROMPT_SETTLE_MS = num(process.env.TMUX_MCP_PROMPT_SETTLE_MS, 800);
 export const MAX_OUTPUT = num(process.env.TMUX_MCP_MAX_OUTPUT, 30000);
 export const WATCHDOG_SESSION = "_watchdog";
