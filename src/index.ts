@@ -88,7 +88,7 @@ const PANE_TOOLS: ToolNames = {
 /** Render a runInPane/waitInPane result the same way tmux_run renders its own. */
 function paneResponse(
   res: PaneRunResult,
-  o: { idleMs: number; maxMs: number; waitForSrc?: string; emptyText?: string },
+  o: { idleMs: number; maxMs: number; waitForSrc?: string; emptyText?: string; command?: string },
 ): string {
   return formatResponse({
     session: res.paneId,
@@ -105,6 +105,7 @@ function paneResponse(
     idleMs: o.idleMs,
     maxMs: o.maxMs,
     emptyText: o.emptyText,
+    command: o.command,
   });
 }
 
@@ -118,7 +119,7 @@ async function maybeRun(
   if (command === undefined || command === "") return "";
   await waitPaneReady(paneId);
   const res = await runInPane(paneId, command, opts);
-  return "\n" + paneResponse(res, { idleMs: opts.idleMs, maxMs: opts.maxMs, waitForSrc });
+  return "\n" + paneResponse(res, { idleMs: opts.idleMs, maxMs: opts.maxMs, waitForSrc, command });
 }
 
 /** One definition of "idle", reused by every tool. */
@@ -146,7 +147,8 @@ const server = new McpServer(
       "Two families of tools. (1) Agent-private sessions — tmux_run / tmux_send_keys / tmux_read / " +
       "tmux_list / tmux_kill — live on a tmux server owned by this process and are destroyed when it " +
       "exits; use them as a stateful Bash for anything the Bash tool cannot do: docker exec -it, ssh, " +
-      "REPLs, dev servers, password/y-n prompts. (2) The user's own tmux server — tmux_ls, " +
+      "REPLs, dev servers, password/y-n prompts — connect once (`ssh host`) and send later commands as bare " +
+      "lines to the same session instead of re-wrapping every call as `ssh host 'cmd'`. (2) The user's own tmux server — tmux_ls, " +
       "tmux_pane_capture, tmux_pane_exec, tmux_pane_send_keys, tmux_new_session, tmux_new_window, " +
       "tmux_split_pane, tmux_kill_target — inspect and drive the sessions the user can watch with " +
       "`tmux attach`; they outlive this server and are never killed by it. `timeout` is an IDLE timeout: " +
@@ -167,7 +169,12 @@ server.registerTool(
       "Use it for things Bash can't do: `docker exec -it …`, `ssh …`, REPLs (python, psql, node), " +
       "dev servers, `sudo`/password prompts, `apt` y/n questions. Returns when the shell shows its " +
       "prompt again (exit code known), when an interactive program shows a prompt, when `wait_for` " +
-      "matches, after `timeout` seconds of silence, or at the `max_timeout` hard cap. The process is " +
+      "matches, after `timeout` seconds of silence, or at the `max_timeout` hard cap. " +
+      "LOG IN ONCE, THEN STAY: for ssh, docker exec or any remote/nested shell, send the connect line " +
+      "alone (`ssh host`) and then send the real commands as bare lines to the SAME session — they run " +
+      "inside the connection, which keeps cwd, env and agents alive. Never wrap each call as " +
+      "`ssh host 'cmd'`: that reconnects every time, loses all state, and defeats this tool. " +
+      "The process is " +
       "never killed: use `tmux_read` for later output and `tmux_send_keys [\"C-c\"]` to stop it. Input " +
       "goes to whatever is in the foreground of that session, so start a dev server in its own session " +
       "name. These sessions are private to this MCP process — to work in the user's own tmux, use " +
@@ -201,7 +208,7 @@ server.registerTool(
         const { body, tui } = await renderBody(s, res, command);
         return ok(formatResponse({
           session: name, status: res.status, exitCode: res.exitCode, fg: res.fg,
-          body, tui, waitForSrc: wait_for, idleMs, maxMs, respawned,
+          body, tui, waitForSrc: wait_for, idleMs, maxMs, respawned, command,
         }));
       });
     } catch (e) {
@@ -456,7 +463,7 @@ server.registerTool(
     const { idleMs, maxMs } = waitWindow(timeout, max_timeout, IDLE_TIMEOUT_S);
     try {
       const res = await runInPane(target, command, { idleMs, maxMs, waitFor });
-      return ok(paneResponse(res, { idleMs, maxMs, waitForSrc: wait_for }));
+      return ok(paneResponse(res, { idleMs, maxMs, waitForSrc: wait_for, command }));
     } catch (e) {
       return err(msgOf(e));
     }

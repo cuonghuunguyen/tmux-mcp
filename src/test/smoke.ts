@@ -14,6 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyCarriageReturns, isTui, stripAnsi, stripEcho, truncate } from "../ansi.js";
+import { oneShot } from "../format.js";
 
 const serverPath = fileURLToPath(new URL("../index.js", import.meta.url));
 const projectRoot = path.dirname(path.dirname(path.dirname(serverPath)));
@@ -125,6 +126,18 @@ function unitChecks(): void {
     q(stripEcho("$ for x in 1; do\n> echo $x\n> done\n1", "for x in 1; do\necho $x\ndone")));
   check("unit isTui", isTui("\x1b[?1049hstuff", false) && !isTui("plain", false) && isTui("plain", true));
   check("unit truncate", truncate("x".repeat(100), 40).includes("truncated 60 chars"));
+  check("unit oneShot ssh", oneShot("ssh host 'cd /x && git status'") === "ssh host",
+    q(String(oneShot("ssh host 'cd /x && git status'"))));
+  check("unit oneShot ssh flags", oneShot("ssh -p 2222 -i k user@h uptime") === "ssh -p 2222 -i k user@h",
+    q(String(oneShot("ssh -p 2222 -i k user@h uptime"))));
+  check("unit oneShot ssh persistent", oneShot("ssh host") === null && oneShot("ssh -t host bash") === null,
+    q(String(oneShot("ssh -t host bash"))));
+  check("unit oneShot docker", oneShot("docker exec api ls /srv") === "docker exec api bash",
+    q(String(oneShot("docker exec api ls /srv"))));
+  check("unit oneShot docker persistent", oneShot("docker exec -it api bash") === null);
+  check("unit oneShot kubectl", oneShot("kubectl exec pod-1 -- ls") === "kubectl exec pod-1 bash",
+    q(String(oneShot("kubectl exec pod-1 -- ls"))));
+  check("unit oneShot plain", oneShot("git status") === null && oneShot("") === null);
 }
 
 // ---------------------------------------------------------------- scenarios
@@ -286,7 +299,7 @@ async function scenarios(userSocket: string): Promise<void> {
 
   // 20c
   r = await call(inst, "tmux_ls");
-  check("20c tmux_ls tree", /session usr1/.test(r.text) && /pane %\d+.*fg=bash/.test(r.text), q(r.text));
+  check("20c tmux_ls tree", /session usr1/.test(r.text) && /pane %\d+.*fg=(bash|zsh|sh|fish)/.test(r.text), q(r.text));
 
   // 20d
   r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "false" });

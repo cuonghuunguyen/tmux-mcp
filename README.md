@@ -36,7 +36,7 @@ There are **two families of tools**:
 
 ## Requirements
 
-* `tmux` (developed and tested against 3.2a)
+* `tmux` (developed and tested against 3.2a and 3.4)
 * Node.js ≥ 18
 * `bash` available as the session shell
 

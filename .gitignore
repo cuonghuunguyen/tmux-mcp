@@ -15,3 +15,7 @@ dist/
 
 # npm pack output
 *.tgz
+
+# agent tooling
+.serena/
+FEEDBACK.md

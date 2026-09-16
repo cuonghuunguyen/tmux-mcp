@@ -84,7 +84,7 @@ interface PaneRow {
   title: string;
 }
 
-const SEP = "";
+const SEP = "@@SEP@@";
 const LIST_FORMAT = [
   "#{session_name}", "#{session_attached}", "#{window_id}", "#{window_index}", "#{window_name}",
   "#{window_active}", "#{pane_id}", "#{pane_index}", "#{pane_active}", "#{pane_current_command}",

@@ -38,6 +38,60 @@ export interface FormatInput {
   tools?: Partial<ToolNames>;
   /** false when a dead pane is NOT respawned automatically (user server). */
   respawns?: boolean;
+  /** Command line that was typed, if any — used to spot one-shot ssh. */
+  command?: string;
+}
+
+/** ssh flags that take a separate value, e.g. `-p 22`, `-i key`, `-o Opt=x`. */
+const SSH_VALUE_FLAGS = new Set("bcDEeFIiJLlmOopQRSWw".split(""));
+
+/** Shells: `ssh host bash` / `docker exec -it c sh` ARE the persistent form. */
+const SHELLS = new Set(["bash", "sh", "zsh", "fish", "ash", "dash", "ksh", "login"]);
+
+/** Commands that open a shell somewhere else, and how many tokens they span. */
+const ENTRIES: [RegExp, string][] = [
+  [/^ssh$/, "ssh"],
+  [/^(docker|podman|nerdctl)$/, "exec"],
+  [/^kubectl$/, "exec"],
+  [/^lxc$/, "exec"],
+  [/^flyctl|^fly$/, "ssh"],
+];
+
+/**
+ * `ssh host 'cmd'`, `docker exec c cmd`, `kubectl exec pod -- cmd`: a one-shot
+ * that reconnects and throws the shell away — the opposite of a persistent
+ * session. Returns the connect line to use instead, or null.
+ */
+export function oneShot(command: string): string | null {
+  const toks = command.trim().split(/\s+/).filter(Boolean);
+  if (!toks.length) return null;
+  const entry = ENTRIES.find(([re]) => re.test(toks[0]));
+  if (!entry) return null;
+  let i = 1;
+  if (entry[1] !== "ssh" || toks[0] !== "ssh") {
+    // subcommand form: docker [compose] exec …, kubectl exec …
+    while (i < toks.length && toks[i] !== entry[1]) {
+      if (toks[i].startsWith("-")) return null; // unknown flag soup, stay quiet
+      i++;
+    }
+    if (i >= toks.length) return null;
+    i++;
+  }
+  const flagStart = i;
+  while (i < toks.length && toks[i].startsWith("-")) {
+    const t = toks[i++];
+    if (t === "--") break;
+    if (t.length === 2 && (toks[0] === "ssh" ? SSH_VALUE_FLAGS.has(t[1]) : "cenu".includes(t[1]))) i++;
+  }
+  const target = toks[i];
+  if (!target || i + 1 >= toks.length) return null;
+  let rest = toks.slice(i + 1);
+  if (rest[0] === "--") rest = rest.slice(1);
+  const first = (rest[0] ?? "").replace(/^['"]/, "").split("/").pop() ?? "";
+  if (!rest.length || SHELLS.has(first)) return null;
+  const flags = toks.slice(flagStart, i).filter((f) => f !== "--");
+  return [...toks.slice(0, flagStart), ...flags, target].join(" ") +
+    (toks[0] === "ssh" ? "" : " bash");
 }
 
 function fgName(fg: string): string {
@@ -98,5 +152,14 @@ export function formatResponse(i: FormatInput): string {
   parts.push(body);
   const footer = footerFor(i);
   if (footer) parts.push(footer);
+  const connect = i.command ? oneShot(i.command) : null;
+  if (connect) {
+    const t = toolsOf(i);
+    parts.push(
+      `[one-shot: that wrapper opened a shell, ran one command and threw it away — cwd, env and anything ` +
+      `interactive are lost on the next call. Open it once with ${t.run}(${refOf(i)}, command:${JSON.stringify(connect)}), ` +
+      `then send bare commands to that same session; it stays logged in.]`,
+    );
+  }
   return parts.join("\n");
 }
