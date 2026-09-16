@@ -1,7 +1,7 @@
 {
   "name": "mcp-tmux",
-  "version": "0.1.0",
-  "description": "MCP server: persistent tmux-backed shell sessions for AI agents \u2014 interactive commands, REPLs, ssh, dev servers",
+  "version": "0.2.0",
+  "description": "MCP server: persistent tmux-backed shell sessions for AI agents — interactive commands, REPLs, ssh, dev servers",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
