@@ -335,6 +335,19 @@ async function scenarios(userSocket: string): Promise<void> {
   r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "echo ok" });
   check("20f2 pane healthy after C-c", r.text === "ok", q(r.text));
 
+  // 20m — untracked nested shell (like ssh) with a prompt PROMPT_RE does not know
+  await call(inst, "tmux_pane_exec", {
+    target: "usr1", command: "script -q /dev/null -c \"env PS1='zz@ ' bash --norc --noprofile\"", timeout: 3,
+  });
+  const t20h = Date.now();
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "echo nested", timeout: 20 });
+  const dt20h = Date.now() - t20h;
+  check("20m1 same prompt again ends an untracked command",
+    r.text.split("\n")[0].trim() === "nested" && dt20h < 3000, `${dt20h}ms ${q(r.text)}`);
+  await call(inst, "tmux_pane_send_keys", { target: "usr1", keys: ["C-d"], timeout: 3 });
+  r = await call(inst, "tmux_pane_exec", { target: "usr1", command: "echo out" });
+  check("20m2 tracked again after nested shell", r.text === "out", q(r.text));
+
   // 20g
   r = await call(inst, "tmux_pane_exec", {
     target: "usr1", command: "(echo a; sleep 0.5; echo READY; sleep 20)", wait_for: "READY", timeout: 10,

@@ -34,7 +34,7 @@ export interface WaitResult {
 
 /** Last non-empty line of a rendered pane; tmux trims trailing spaces. */
 export const PROMPT_RE =
-  /(?:[$#%>»❯]|\]|\)|\?|:)\s*$|password[^\n]*$|\[[yY]\/[nN]\]$|\(y(?:es)?\/no?\)$/i;
+  /(?:[$#%>»❯➜→λ✗✘✔✓]|\]|\)|\?|:)\s*$|password[^\n]*$|\[[yY]\/[nN]\]$|\(y(?:es)?\/no?\)$/i;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

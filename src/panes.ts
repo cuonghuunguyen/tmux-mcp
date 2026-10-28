@@ -188,6 +188,9 @@ function paneBase(info: UserPaneInfo): number {
 
 const SHELLS = new Set(["bash", "zsh", "sh", "dash", "ash", "ksh", "mksh", "fish"]);
 
+/** Silence required before "last line equals the pre-command prompt" counts as done. */
+const SAME_PROMPT_SETTLE_MS = 300;
+
 /** Lines our exit-code sentinel produces — never shown to the agent. */
 const SENTINEL_LINE_RE = /^__mcp:\d+:[0-9a-z]{4,10}\s*$/;
 
@@ -261,9 +264,15 @@ export async function runInPane(target: string, command: string, opts: PaneWaitO
     line = `${command}${sep}printf '\\n__mcp:%s:${id}\\n' ${status}`;
   }
   const base = paneBase(info);
+  // The line under the cursor before typing is the current prompt (local shell, or the
+  // remote shell behind ssh). Seeing it again as the last line means the command finished,
+  // whatever the prompt theme looks like.
+  const prompt = tracked
+    ? undefined
+    : ((await captureFrom(info.paneId, base, info).catch(() => "")).split("\n")[0] ?? "").trim() || undefined;
   if (line.length) await userTmux(["send-keys", "-t", info.paneId, "-l", "--", line]);
   await userTmux(["send-keys", "-t", info.paneId, "Enter"]);
-  return await waitInPane(info.paneId, base, opts, { command, sentinelId: tracked ? id : undefined });
+  return await waitInPane(info.paneId, base, opts, { command, sentinelId: tracked ? id : undefined, prompt });
 }
 
 /** Absolute line the output of the next command starts at — call before sending keys. */
@@ -276,7 +285,7 @@ export async function waitInPane(
   paneId: string,
   base: number,
   opts: PaneWaitOpts,
-  ctx: { command?: string; sentinelId?: string } = {},
+  ctx: { command?: string; sentinelId?: string; prompt?: string } = {},
 ): Promise<PaneRunResult> {
   const pollMs = opts.pollMs ?? 150;
   const startedAt = Date.now();
@@ -358,6 +367,11 @@ export async function waitInPane(
     if (opts.idleMs <= 0 && opts.maxMs <= 0) return result("immediate", text);
 
     const silentFor = Date.now() - lastChangeAt;
+    if (ctx.prompt && silentFor >= SAME_PROMPT_SETTLE_MS) {
+      const lines = trimTrailingBlank(text).split("\n");
+      // lines[0] is the echo (prompt + command); a later line equal to the old prompt is the next prompt
+      if (lines.length > 1 && lines[lines.length - 1].trim() === ctx.prompt) return result("prompt", text);
+    }
     if (silentFor >= PROMPT_SETTLE_MS) {
       const last = trimTrailingBlank(text).split("\n").pop() ?? "";
       if (last.trim() !== "" && PROMPT_RE.test(last) && !isCommandEcho(last, ctx.command)) {
